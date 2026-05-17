@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Console Ferroviaire Nationale</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@400;600;700;900&display=swap');
+
+        :root {
+            --rail-blue: #0a1628;
+            --rail-mid: #0f2040;
+            --accent: #00d4ff;
+            --accent2: #f5a623;
+            --green: #00e676;
+            --red: #ff1744;
+            --text: #e8f4f8;
+            --muted: #4a7a94;
+            --surface: #0d1f35;
+            --border: rgba(0, 212, 255, 0.2);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Barlow Condensed', sans-serif;
+            background: var(--rail-blue);
+            color: var(--text);
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── HEADER ── */
+        #header {
+            background: var(--rail-mid);
+            border-bottom: 1px solid var(--border);
+            padding: 8px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 1000;
+            flex-shrink: 0;
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #logo {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: var(--accent);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            opacity: 0.7;
+        }
+
+        .badges {
+            display: flex;
+            gap: 6px;
+        }
+
+        .badge {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 2px;
+            border: 1px solid var(--muted);
+            color: var(--muted);
+            letter-spacing: 1px;
+        }
+        .badge.ok { border-color: var(--green); color: var(--green); }
+        .badge.warn { border-color: var(--accent2); color: var(--accent2); }
+        .badge.err { border-color: var(--red); color: var(--red); }
+
+        /* ── PK BLOCK ── */
+        .pk-block {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+        }
+
+        #pk-display {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 42px;
+            font-weight: 400;
+            color: var(--accent);
+            letter-spacing: 2px;
+            line-height: 1;
+            text-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+            transition: color 0.3s;
+        }
+
+        .pk-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        #label-ligne {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .sub-row {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+        }
+
+        .sub-item {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .sub-item span {
+            color: var(--text);
+            font-size: 12px;
+        }
+
+        #vitesse-val {
+            color: var(--accent2);
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        #sens-val { color: var(--green); }
+
+        /* ── BANDEAU DÉFILANT ── */
+        #ticker-wrap {
+            background: var(--rail-blue);
+            border-top: 1px solid var(--border);
+            border-bottom: 2px solid var(--accent);
+            height: 68px;
+            position: relative;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        #ticker-track {
+            display: flex;
+            align-items: center;
+            height: 100%;
+            position: absolute;
+            left: 0;
+            top: 0;
+            white-space: nowrap;
+            /* scroll via JS */
+        }
+
+        .ticker-item {
+            display: inline-flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 0 28px;
+            height: 100%;
+            border-right: 1px solid rgba(0,212,255,0.12);
+            transition: all 0.4s ease;
+            cursor: default;
+        }
+
+        .ticker-item .t-name {
+            font-family: 'Barlow Condensed', sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: var(--text);
+            text-transform: uppercase;
+        }
+
+        .ticker-item .t-pk {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 2px;
+        }
+
+        .ticker-item .t-type {
+            font-size: 9px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-top: 1px;
+        }
+
+        /* Items passés */
+        .ticker-item.passed .t-name { color: var(--muted); }
+        .ticker-item.passed .t-pk { opacity: 0.4; }
+
+        /* Item actif — freeze */
+        .ticker-item.active-freeze {
+            background: rgba(0, 212, 255, 0.07);
+            border-left: 2px solid var(--accent);
+            border-right: 2px solid var(--accent);
+        }
+        .ticker-item.active-freeze .t-name {
+            font-size: 22px;
+            color: var(--accent);
+            text-shadow: 0 0 14px rgba(0,212,255,0.5);
+            animation: pulse-freeze 1s ease-in-out infinite alternate;
+        }
+        .ticker-item.active-freeze .t-pk { color: var(--accent); opacity: 0.8; }
+
+        @keyframes pulse-freeze {
+            from { text-shadow: 0 0 10px rgba(0,212,255,0.3); }
+            to   { text-shadow: 0 0 24px rgba(0,212,255,0.8); }
+        }
+
+        /* Couleurs par type */
+        .ticker-item[data-type="gare"] .t-type { color: #38bdf8; }
+        .ticker-item[data-type="triage"] .t-type { color: #fb923c; }
+        .ticker-item[data-type="ite"] .t-type { color: #a78bfa; }
+        .ticker-item[data-type="tunnel"] .t-type { color: #94a3b8; }
+
+        /* Indicateur de position au centre */
+        #ticker-cursor {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: rgba(245,166,35,0.25);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #ticker-cursor::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -3px;
+            width: 8px;
+            height: 8px;
+            background: var(--accent2);
+            clip-path: polygon(50% 100%, 0 0, 100% 0);
+        }
+
+        /* ── MAP ── */
+        #map {
+            flex: 1;
+            width: 100%;
+        }
+
+        /* ── LOADING ── */
+        #loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--rail-blue);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            gap: 16px;
+            transition: opacity 0.5s;
+        }
+
+        #loading-overlay.hidden { opacity: 0; pointer-events: none; }
+
+        .loading-title {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 13px;
+            color: var(--accent);
+            letter-spacing: 3px;
+        }
+
+        .loading-bar-wrap {
+            width: 240px;
+            height: 3px;
+            background: rgba(0,212,255,0.15);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .loading-bar {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.4s ease;
+        }
+
+        #loading-msg {
+            font-size: 12px;
+            color: var(--muted);
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        /* ── HORS LIGNE overlay ── */
+        #hors-ligne-msg {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(13,31,53,0.9);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 6px 14px;
+            font-size: 12px;
+            color: var(--muted);
+            font-family: 'Share Tech Mono', monospace;
+            pointer-events: none;
+            display: none;
+            z-index: 500;
+        }
+
+        /* Scrollbar masquée */
+        ::-webkit-scrollbar { display: none; }
+    </style>
+</head>
+<body>
+
+<!-- Overlay chargement -->
+<div id="loading-overlay">
+    <div class="loading-title">CONSOLE FERROVIAIRE ● RFN</div>
+    <div class="loading-bar-wrap"><div class="loading-bar" id="load-bar"></div></div>
+    <div id="loading-msg">Initialisation...</div>
+</div>
+
+<!-- Header -->
+<div id="header">
+    <div class="header-top">
+        <div id="logo">▐ RFN / POSITION CABINE</div>
+        <div class="badges">
+            <div class="badge" id="badge-gps">GPS --</div>
+            <div class="badge" id="badge-db">DB --</div>
+            <div class="badge" id="badge-sens">SENS --</div>
+        </div>
+    </div>
+    <div class="pk-block">
+        <div id="pk-display">PK --+---</div>
+        <div class="pk-meta">
+            <div id="label-ligne">En attente de signal GPS...</div>
+            <div class="sub-row">
+                <div class="sub-item">VITESSE&nbsp;<span id="vitesse-val">-- km/h</span></div>
+                <div class="sub-item">ÉCART&nbsp;<span id="ecart-val">-- m</span></div>
+                <div class="sub-item">VMAX&nbsp;<span id="vmax-val">-- km/h</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Bandeau défilant -->
+<div id="ticker-wrap">
+    <div id="ticker-cursor"></div>
+    <div id="ticker-track"></div>
+</div>
+
+<!-- Carte -->
+<div style="position:relative; flex:1; display:flex;">
+    <div id="map"></div>
+    <div id="hors-ligne-msg">Position hors voie ferrée (&gt; 800 m)</div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+//   ÉTAT GLOBAL
+// ═══════════════════════════════════════════════════
+const state = {
+    map: null,
+    marqueurTrain: null,
+    dbVoies: null,
+    lieux: [],          // tous les lieux chargés (gares + triages + ITE + tunnels)
+    lieuxLigne: [],     // lieux filtrés pour la ligne courante
+    dernierPK: null,
+    sensMarche: 'Inconnu',  // 'Croissant' | 'Décroissant' | 'Inconnu'
+    codeLigneActuel: null,
+    tickerOffset: 0,
+    freezeIndex: -1,
+    freezeTimer: null,
+    animFrame: null,
+    vitessePixParSec: 60,  // px/s vitesse scroll par défaut
+    tickerItemWidth: 200,  // sera recalculé
+    itemElements: [],
+};
+
+function parsePK(pkStr) {
+    if (!pkStr) return null;
+    const s = pkStr.toString().trim();
+    // format "123+456" → 123.456
+    const m = s.match(/^(\d+)\+(\d+)$/);
+    if (m) return parseFloat(m[1]) + parseFloat(m[2]) / 1000;
+    // format décimal direct
+    const v = parseFloat(s);
+    return isNaN(v) ? null : v;
+}
+
+function formatPK(pkFloat) {
+    const km = Math.floor(pkFloat);
+    const m = Math.round((pkFloat - km) * 1000).toString().padStart(3, '0');
+    return `PK ${km}+${m}`;
+}
+
+// ═══════════════════════════════════════════════════
+//   CHARGEMENT
+// ═══════════════════════════════════════════════════
+async function charger() {
+    const bar = document.getElementById('load-bar');
+    const msg = document.getElementById('loading-msg');
+
+    function progress(pct, txt) {
+        bar.style.width = pct + '%';
+        msg.innerText = txt;
+    }
+
+    // Carte
+    progress(5, 'Initialisation de la carte...');
+    initCarte();
+
+    // Gares
+    progress(15, 'Chargement des gares...');
+    let gares = [];
+    try {
+        const r = await fetch('liste-des-gares.geojson');
+        const d = await r.json();
+        gares = d.features.map(f => ({
+            type: 'gare',
+            nom: f.properties.libelle || '?',
+            code_ligne: (f.properties.code_ligne || '').toString(),
+            pk_float: parsePK(f.properties.pk),
+            pk_str: f.properties.pk,
+            coords: f.geometry.coordinates,
+        })).filter(x => x.pk_float !== null);
+    } catch(e) { console.warn('Gares:', e); }
+
+    // Triages
+    progress(35, 'Chargement des triages...');
+    let triages = [];
+    try {
+        const r = await fetch('liste-des-triages.geojson');
+        const d = await r.json();
+        triages = d.features.map(f => ({
+            type: 'triage',
+            nom: f.properties.libelle || '?',
+            code_ligne: (f.properties.code_ligne || '').toString(),
+            pk_float: parsePK(f.properties.pk),
+            pk_str: f.properties.pk,
+            coords: f.geometry.coordinates,
+        })).filter(x => x.pk_float !== null);
+    } catch(e) { console.warn('Triages:', e); }
+
+    // ITE
+    progress(50, 'Chargement des ITE...');
+    let ites = [];
+    try {
+        const r = await fetch('liste-des-installations-terminales-embranchees.geojson');
+        const d = await r.json();
+        ites = d.features.map(f => ({
+            type: 'ite',
+            nom: f.properties.gare || '?',
+            code_ligne: (f.properties.code_ligne || '').toString(),
+            pk_float: parsePK(f.properties.pk),
+            pk_str: f.properties.pk,
+            coords: f.geometry.coordinates,
+        })).filter(x => x.pk_float !== null);
+    } catch(e) { console.warn('ITE:', e); }
+
+    // Tunnels
+    progress(65, 'Chargement des tunnels...');
+    let tunnels = [];
+    try {
+        const r = await fetch('lignes-tunnels.geojson');
+        const d = await r.json();
+        tunnels = d.features.map(f => ({
+            type: 'tunnel',
+            nom: f.properties.libelle || 'Tunnel',
+            code_ligne: (f.properties.code_ligne || '').toString(),
+            pk_float: f.properties.pkd !== undefined ? parseFloat(f.properties.pkd) : null,
+            pk_str: f.properties.pkd !== undefined ? f.properties.pkd.toFixed(3) : '?',
+            coords: null,
+        })).filter(x => x.pk_float !== null);
+    } catch(e) { console.warn('Tunnels:', e); }
+
+    state.lieux = [...gares, ...triages, ...ites, ...tunnels];
+
+    document.getElementById('badge-db').className = 'badge ok';
+    document.getElementById('badge-db').innerText = 'DB OK';
+
+    progress(85, 'Démarrage GPS...');
+    activerGPS();
+
+    progress(100, 'Prêt');
+    setTimeout(() => {
+        document.getElementById('loading-overlay').classList.add('hidden');
+        setTimeout(() => document.getElementById('loading-overlay').remove(), 600);
+    }, 400);
+}
+
+// ═══════════════════════════════════════════════════
+//   CARTE
+// ═══════════════════════════════════════════════════
+function initCarte() {
+    state.map = L.map('map', { center: [46.9, 2.3], zoom: 6, zoomControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap'
+    }).addTo(state.map);
+
+    const icon = L.divIcon({
+        className: '',
+        html: `<div style="
+            width:16px; height:16px; border-radius:50%;
+            background:var(--accent); border:3px solid white;
+            box-shadow:0 0 10px rgba(0,212,255,0.7);
+        "></div>`,
+        iconSize: [16, 16], iconAnchor: [8, 8]
+    });
+    state.marqueurTrain = L.marker([46.9, 2.3], { icon }).addTo(state.map);
+}
+
+// ═══════════════════════════════════════════════════
+//   GPS
+// ═══════════════════════════════════════════════════
+function activerGPS() {
+    if (!navigator.geolocation) {
+        document.getElementById('badge-gps').innerText = 'GPS N/A';
+        document.getElementById('badge-gps').className = 'badge err';
+        return;
+    }
+
+    navigator.geolocation.watchPosition(onPosition, onGPSError, {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+    });
+}
+
+function onGPSError(e) {
+    document.getElementById('badge-gps').innerText = 'GPS ERR';
+    document.getElementById('badge-gps').className = 'badge err';
+}
+
+function onPosition(pos) {
+    const lon = pos.coords.longitude;
+    const lat = pos.coords.latitude;
+    const speed = pos.coords.speed;
+    const vitesse = speed !== null ? Math.round(speed * 3.6) : 0;
+
+    document.getElementById('badge-gps').innerText = 'GPS OK';
+    document.getElementById('badge-gps').className = 'badge ok';
+
+    state.marqueurTrain.setLatLng([lat, lon]);
+
+    const pt = turf.point([lon, lat]);
+    let voieProche = null;
+    let distMin = Infinity;
+
+    if (!state.dbVoies) {
+        // Pas de fond de carte chargé : on cherche la ligne par lieux proches
+    }
+
+    // Chercher le lieu le plus proche pour identifier la ligne
+    // (rapide car on cherche une correspondance de lieux filtrés)
+    // → On passe par snap sur les lieux pour trouver code_ligne
+    // Fallback : on utilise le lieu le plus proche dans toute la base
+    const RAYON_RECHERCHE_KM = 2.0;
+    let lieuLePlusProche = null;
+    let distLieu = Infinity;
+
+    for (const l of state.lieux) {
+        if (!l.coords) continue;
+        const d = turf.distance(pt, turf.point(l.coords));
+        if (d < distLieu) { distLieu = d; lieuLePlusProche = l; }
+    }
+
+    let codeLigne = lieuLePlusProche ? lieuLePlusProche.code_ligne : null;
+    let ecartMetres = Math.round(distLieu * 1000);
+
+    // Si très loin de tout lieu, on affiche "hors ligne"
+    if (distLieu > RAYON_RECHERCHE_KM) {
+        document.getElementById('hors-ligne-msg').style.display = 'block';
+        document.getElementById('badge-gps').innerText = 'GPS HORS VOIE';
+        document.getElementById('badge-gps').className = 'badge warn';
+        return;
+    }
+    document.getElementById('hors-ligne-msg').style.display = 'none';
+
+    // Calcul du PK : approximation par interpolation sur le lieu le plus proche
+    // On prend le PK du lieu le plus proche et on l'ajuste selon la position relative
+    // Pour affichage temps réel : utiliser le PK du lieu + décalage estimé en km le long de la voie
+    // (sans fichier de voie chargé, on fait une interpolation simple entre lieux voisins)
+
+    // Récupérer les lieux de la ligne courante
+    if (codeLigne !== state.codeLigneActuel) {
+        state.codeLigneActuel = codeLigne;
+        filtrerLieuxLigne(codeLigne);
+    }
+
+    // Interpolation PK : chercher les 2 lieux voisins (avant/après par PK)
+    const pkEstime = interpolerPK(pt, state.lieuxLigne);
+
+    if (pkEstime !== null) {
+        // Détection du sens
+        if (state.dernierPK !== null && vitesse > 3) {
+            const delta = pkEstime - state.dernierPK;
+            if (delta > 0.003) {
+                state.sensMarche = 'Croissant';
+                document.getElementById('badge-sens').innerText = 'IMPAIR V1';
+                document.getElementById('badge-sens').className = 'badge ok';
+            } else if (delta < -0.003) {
+                state.sensMarche = 'Décroissant';
+                document.getElementById('badge-sens').innerText = 'PAIR V2';
+                document.getElementById('badge-sens').className = 'badge warn';
+            }
+        }
+        state.dernierPK = pkEstime;
+
+        // Affichage
+        document.getElementById('pk-display').innerText = formatPK(pkEstime);
+        document.getElementById('vitesse-val').innerText = vitesse + ' km/h';
+        document.getElementById('ecart-val').innerText = ecartMetres + ' m';
+
+        const ligneInfo = state.lieux.find(l => l.code_ligne === codeLigne);
+        document.getElementById('label-ligne').innerText = `LIGNE ${codeLigne}`;
+
+        // Mise à jour du ticker
+        actualiserTicker(pkEstime);
+    }
+
+    // Centrer la carte
+    state.map.setView([lat, lon], Math.max(state.map.getZoom(), 13));
+}
+
+function interpolerPK(pt, lieuxLigne) {
+    if (!lieuxLigne || lieuxLigne.length === 0) return null;
+    const avecCoords = lieuxLigne.filter(l => l.coords);
+    if (avecCoords.length === 0) return null;
+
+    // Trouver les 2 lieux les plus proches géographiquement
+    const avecDist = avecCoords.map(l => ({
+        l,
+        d: turf.distance(pt, turf.point(l.coords)),
+    })).sort((a, b) => a.d - b.d);
+
+    const top = avecDist.slice(0, 2);
+    if (top.length === 1) return top[0].l.pk_float;
+
+    const lA = top[0].l, lB = top[1].l;
+    const dA = top[0].d, dB = top[1].d;
+    const total = dA + dB;
+    if (total === 0) return lA.pk_float;
+
+    // Interpolation pondérée par distance
+    return (lA.pk_float * (1 - dA / total)) + (lB.pk_float * (1 - dB / total));
+}
+
+// ═══════════════════════════════════════════════════
+//   TICKER
+// ═══════════════════════════════════════════════════
+function filtrerLieuxLigne(codeLigne) {
+    state.lieuxLigne = state.lieux
+        .filter(l => l.code_ligne === codeLigne)
+        .sort((a, b) => a.pk_float - b.pk_float);
+    construireTicker();
+}
+
+const LABELS = {
+    gare:   'GARE VOYAGEURS',
+    triage: 'TRIAGE',
+    ite:    'ITE',
+    tunnel: 'TUNNEL',
+};
+
+function construireTicker() {
+    const track = document.getElementById('ticker-track');
+    track.innerHTML = '';
+    state.itemElements = [];
+    state.freezeIndex = -1;
+    if (state.freezeTimer) clearTimeout(state.freezeTimer);
+
+    state.lieuxLigne.forEach((lieu, i) => {
+        const el = document.createElement('div');
+        el.className = 'ticker-item';
+        el.dataset.type = lieu.type;
+        el.dataset.idx = i;
+        el.innerHTML = `
+            <div class="t-name">${lieu.nom.toUpperCase()}</div>
+            <div class="t-pk">${formatPK(lieu.pk_float)}</div>
+            <div class="t-type">${LABELS[lieu.type] || lieu.type}</div>
+        `;
+        track.appendChild(el);
+        state.itemElements.push(el);
+    });
+
+    // Lancer animation scroll
+    if (state.animFrame) cancelAnimationFrame(state.animFrame);
+    state.tickerOffset = 0;
+    animateTicker();
+}
+
+let lastTimestamp = null;
+
+function animateTicker() {
+    state.animFrame = requestAnimationFrame((ts) => {
+        if (!lastTimestamp) lastTimestamp = ts;
+        const dt = (ts - lastTimestamp) / 1000;
+        lastTimestamp = ts;
+
+        // Ne pas scroller si freeze en cours
+        if (state.freezeIndex === -1) {
+            const speed = Math.max(20, Math.min(120, (state.vitessePixParSec || 50)));
+            const delta = (state.sensMarche === 'Décroissant' ? -1 : 1) * speed * dt;
+            state.tickerOffset -= delta;
+
+            document.getElementById('ticker-track').style.transform =
+                `translateX(${state.tickerOffset}px)`;
+        }
+
+        animateTicker();
+    });
+}
+
+function actualiserTicker(pkActuel) {
+    const lieux = state.lieuxLigne;
+    if (!lieux || lieux.length === 0) return;
+
+    // Trouver l'index du lieu courant (le plus proche du PK actuel, dans un rayon de 0.15 km)
+    let closestIdx = -1;
+    let closestDist = Infinity;
+
+    lieux.forEach((l, i) => {
+        const d = Math.abs(l.pk_float - pkActuel);
+        if (d < closestDist) { closestDist = d; closestIdx = i; }
+    });
+
+    const SEUIL_FREEZE = 0.15; // km
+
+    if (closestDist < SEUIL_FREEZE && closestIdx !== state.freezeIndex) {
+        // Nouveau lieu détecté → freeze
+        freezeLieu(closestIdx);
+    } else if (closestDist >= SEUIL_FREEZE && state.freezeIndex !== -1) {
+        // On s'éloigne → dégeler si le timer est passé
+    }
+
+    // Mise à jour des classes passed/active
+    lieux.forEach((l, i) => {
+        const el = state.itemElements[i];
+        if (!el) return;
+        if (i === state.freezeIndex) return; // géré par freeze
+
+        const isPassed = state.sensMarche === 'Décroissant'
+            ? l.pk_float > pkActuel
+            : l.pk_float < pkActuel;
+
+        el.classList.toggle('passed', isPassed);
+        el.classList.remove('active-freeze');
+    });
+
+    // Scroll auto : amener le prochain lieu vers le centre
+    if (state.freezeIndex === -1) {
+        let prochainIdx = -1;
+        lieux.forEach((l, i) => {
+            if (prochainIdx !== -1) return;
+            if (state.sensMarche === 'Décroissant') {
+                if (l.pk_float < pkActuel) prochainIdx = i;
+            } else {
+                if (l.pk_float > pkActuel) prochainIdx = i;
+            }
+        });
+        if (prochainIdx !== -1) centrerItemDouceur(prochainIdx);
+    }
+}
+
+function freezeLieu(idx) {
+    // Nettoyer précédent
+    if (state.freezeTimer) clearTimeout(state.freezeTimer);
+    state.itemElements.forEach(el => el.classList.remove('active-freeze'));
+
+    state.freezeIndex = idx;
+    const el = state.itemElements[idx];
+    if (!el) return;
+
+    el.classList.remove('passed');
+    el.classList.add('active-freeze');
+
+    // Centrer immédiatement
+    centrerItemImmédiat(idx);
+
+    state.freezeTimer = setTimeout(() => {
+        state.freezeIndex = -1;
+        el.classList.remove('active-freeze');
+    }, 5000);
+}
+
+function centrerItemDouceur(idx) {
+    const el = state.itemElements[idx];
+    if (!el) return;
+    const wrap = document.getElementById('ticker-wrap');
+    const wrapCenter = wrap.offsetWidth / 2;
+    const elLeft = el.offsetLeft;
+    const elCenter = elLeft + el.offsetWidth / 2;
+    const targetOffset = wrapCenter - elCenter;
+    // Approche douce : ajuster la vitesse cible
+    state.tickerOffset += (targetOffset - state.tickerOffset) * 0.008;
+}
+
+function centrerItemImmédiat(idx) {
+    const el = state.itemElements[idx];
+    if (!el) return;
+    const wrap = document.getElementById('ticker-wrap');
+    const wrapCenter = wrap.offsetWidth / 2;
+    const elLeft = el.offsetLeft;
+    const elCenter = elLeft + el.offsetWidth / 2;
+    state.tickerOffset = wrapCenter - elCenter;
+    document.getElementById('ticker-track').style.transform = `translateX(${state.tickerOffset}px)`;
+}
+
+// ═══════════════════════════════════════════════════
+//   INIT
+// ═══════════════════════════════════════════════════
+window.onload = charger;
+</script>
+</body>
+</html>
